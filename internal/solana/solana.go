@@ -39,7 +39,7 @@ func (c *Client) InitiateTransfer(senderID uint, recipientID uint, netAmount flo
 		return "", err
 	}
 	// Update sender's balance
-	err = dbTx.QueryRow(context.Background(), "UPDATE users SET balance_usdt = balance_usdt - $1 WHERE id = $2", netAmount+fees, senderID).Scan()
+	_, err = dbTx.Exec(context.Background(), "UPDATE users SET balance_usdt = balance_usdt - $1 WHERE id = $2", netAmount+fees, senderID)
 	if err != nil {
 		return "", err
 	}
@@ -108,16 +108,19 @@ func (c *Client) ClaimTransfer(hash string) error {
 	if err != nil {
 		return err
 	}
-	c.db.GetPool().QueryRow(context.Background(), "SELECT recipient_id FROM transfers WHERE solana_tx_hash = $1", hash).Scan(&userID)
+	if err := c.db.GetPool().QueryRow(context.Background(), "SELECT recipient_id FROM transfers WHERE solana_tx_hash = $1", hash).Scan(&userID); err != nil {
+		return err
+	}
 	if status != "confirmed" {
 		return nil // pas encore confirmé, on réessaiera plus tard
 	}
-	// For now funds are sent directly to servers wallet, so no need to do anything here. In a real implementation, we would now transfer the funds from the server wallet to their corresponding bridge wallet or conversion ramp.
-	c.db.GetPool().QueryRow(context.Background(), "UPDATE transfers SET status = 'completed' WHERE solana_tx_hash = $1 AND recipient_id = $2", hash, userID)
+	_, err = c.db.GetPool().Exec(context.Background(), "UPDATE transfers SET status = 'completed' WHERE solana_tx_hash = $1 AND recipient_id = $2", hash, userID)
+	if err != nil {
+		return err
+	}
 
-	c.db.GetPool().QueryRow(context.Background(), "UPDATE users SET balance_usdt = balance_usdt + (SELECT amount_usdt FROM transfers WHERE solana_tx_hash = $1) WHERE id = $2", hash, userID)
-
-	return nil
+	_, err = c.db.GetPool().Exec(context.Background(), "UPDATE users SET balance_usdt = balance_usdt + (SELECT amount_usdt FROM transfers WHERE solana_tx_hash = $1) WHERE id = $2", hash, userID)
+	return err
 }
 
 func (c *Client) GetTransactionStatus(txHash string) (string, error) {
@@ -144,4 +147,3 @@ func NewClient(endpoint string, db *db.PostgresDB, admin string) (*Client, error
 		admin:  solanaAdmin,
 	}, nil
 }
-

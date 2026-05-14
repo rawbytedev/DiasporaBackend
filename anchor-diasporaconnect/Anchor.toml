@@ -1,0 +1,9 @@
+[programs.localnet]
+DiasporaConnect = "Diaspora1111111111111111111111111111111111111"
+
+[registry]
+url = "https://api.anchor-lang.com"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"

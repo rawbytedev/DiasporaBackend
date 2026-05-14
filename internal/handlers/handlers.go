@@ -88,7 +88,12 @@ func Login(userRepo *repository.UserRepo) http.HandlerFunc {
 
 func Withdraw(userRepo *repository.UserRepo, mobileMoneyClient *mobilemoney.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// implémentation du retrait vers mobile money
+		r.ParseForm()
+		userID := r.Context().Value("userID").(uint)
+		amount := r.Form.Get("amount")
+		userRepo.DebitBalance(userID, amount)
+		userRepo.InvalidateUser(userID) // invalide le cache de l'utilisateur pour forcer une mise à jour du solde
+		mobileMoneyClient.SendMoney(userID, amount)
 	}
 }
 func VerifyOTP(userRepo *repository.UserRepo) http.HandlerFunc {

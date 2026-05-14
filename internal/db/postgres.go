@@ -2,9 +2,15 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	defaultMaxConns = 5
+	defaultMinConns = 1
 )
 
 type PostgresDB struct {
@@ -13,7 +19,41 @@ type PostgresDB struct {
 
 // NewPostgresDB initializes a new PostgresDB with the given DSN (Data Source Name).
 func NewPostgresDB(dsn string) (*PostgresDB, error) {
-	pool, err := pgxpool.New(context.Background(), dsn)
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	config.MaxConns = defaultMaxConns
+	config.MinConns = defaultMinConns
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.MaxConnLifetime = time.Hour
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		return nil, err
+	}
+	return &PostgresDB{pool: pool}, nil
+}
+
+// NewPostgresDBWithConfig initializes PostgresDB with custom pool config
+func NewPostgresDBWithConfig(dsn string, maxConns int32, minConns int32) (*PostgresDB, error) {
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	if maxConns < defaultMinConns {
+		maxConns = defaultMaxConns
+	}
+	if minConns < defaultMinConns {
+		minConns = defaultMinConns
+	}
+	if minConns > maxConns {
+		minConns = defaultMinConns
+	}
+	config.MaxConns = maxConns
+	config.MinConns = minConns
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.MaxConnLifetime = time.Hour
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		return nil, err
 	}
@@ -41,5 +81,7 @@ func aliveCheck(pool *pgxpool.Pool) error {
 
 // Close closes the database connection pool.
 func (db *PostgresDB) Close() {
-	db.pool.Close()
+	if db.pool != nil {
+		db.pool.Close()
+	}
 }

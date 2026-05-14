@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -31,8 +33,44 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
 		}
-		// stocker l'ID utilisateur dans le contexte
-		ctx := context.WithValue(r.Context(), "userID", claims["userID"])
+
+		userID, err := parseUserIDFromClaims(claims)
+		if err != nil {
+			http.Error(w, "invalid userID claim", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), "userID", userID)
 		next(w, r.WithContext(ctx))
+	}
+}
+
+func parseUserIDFromClaims(claims jwt.MapClaims) (uint, error) {
+	value, ok := claims["userID"]
+	if !ok {
+		return 0, fmt.Errorf("missing userID claim")
+	}
+
+	switch v := value.(type) {
+	case float64:
+		return uint(v), nil
+	case float32:
+		return uint(v), nil
+	case int:
+		return uint(v), nil
+	case int64:
+		return uint(v), nil
+	case uint:
+		return v, nil
+	case uint64:
+		return uint(v), nil
+	case string:
+		u64, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return uint(u64), nil
+	default:
+		return 0, fmt.Errorf("unsupported userID claim type")
 	}
 }

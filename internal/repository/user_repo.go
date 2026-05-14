@@ -17,6 +17,10 @@ type UserRepo struct {
 	db    *db.PostgresDB
 }
 
+func (r *UserRepo) DebitBalance(userID uint, amount string) {
+	
+}
+
 func NewUserRepo(cache *cache.CacheStore, db *db.PostgresDB) *UserRepo {
 	return &UserRepo{cache: cache, db: db}
 }

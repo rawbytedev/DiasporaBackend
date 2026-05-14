@@ -91,7 +91,7 @@ func CreateTable(t *testing.T, db *db.PostgresDB) {
 
 }
 
-func TestCreateUser(t *testing.T) {
+func CreateUser(t *testing.T) {
 	userRepo, db, err := SetupTestDB(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

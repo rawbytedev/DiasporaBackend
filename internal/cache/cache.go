@@ -60,7 +60,10 @@ func (c *CacheStore) Delete(ctx context.Context, key string) error {
 
 // Close closes the cache.
 func (c *CacheStore) Close() error {
-	return c.badger.Close()
+    if c.badger != nil {
+        return c.badger.Close()   // underlying DB close
+    }
+    return nil
 }
 
 // BatchPut adds a key-value pair to the batch for later commit.

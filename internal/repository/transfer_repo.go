@@ -20,34 +20,45 @@ func NewTransferRepo(cache *cache.CacheStore, db *db.PostgresDB) *TransferRepo {
 	return &TransferRepo{cache: cache, db: db}
 }
 
-func (r *TransferRepo) CreateTransfer(ctx context.Context, tx *models.Transfer) error {
+func (r *TransferRepo) CreateTransfer(ctx context.Context, tx *models.Transfer) (err error) {
 	dbTx, err := r.db.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
-
-	if err := InsertTransfer(ctx, dbTx, tx); err != nil {
-		return err
-	}
 	defer func() {
 		if err != nil {
-			dbTx.Rollback(ctx)
+			_ = dbTx.Rollback(ctx)
 		} else {
-			dbTx.Commit(ctx)
+			_ = dbTx.Commit(ctx)
 		}
 	}()
-	return nil
+
+	err = InsertTransfer(ctx, dbTx, tx)
+	return err
 }
 
 func (r *TransferRepo) GetPendingTransfersForRecipient(recipientID uint) ([]models.Transfer, error) {
 	var transfers []models.Transfer
-	err := r.db.GetPool().QueryRow(context.Background(), `
+	rows, err := r.db.GetPool().Query(context.Background(), `
 		SELECT id, sender_id, recipient_id, amount_usdt, fees_usdt, status, solana_tx_hash, created_at, expires_at, claimed_at
 		FROM transfers
 		WHERE recipient_id = $1 AND status = $2
 		ORDER BY created_at DESC
-	`, recipientID, "pending").Scan(&transfers)
-	return transfers, err
+	`, recipientID, "pending")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var tx models.Transfer
+		err := rows.Scan(&tx.ID, &tx.SenderID, &tx.RecipientID, &tx.AmountUSDT, &tx.FeesUSDT, &tx.Status, &tx.SolanaTxHash, &tx.CreatedAt, &tx.ExpiresAt, &tx.ClaimedAt)
+		if err != nil {
+			return nil, err
+		}
+		transfers = append(transfers, tx)
+	}
+	return transfers, rows.Err()
 }
 
 func (r *TransferRepo) GetTransferByHash(hash string) (*models.Transfer, error) {
@@ -56,20 +67,28 @@ func (r *TransferRepo) GetTransferByHash(hash string) (*models.Transfer, error) 
 		SELECT id, sender_id, recipient_id, amount_usdt, fees_usdt, status, solana_tx_hash, created_at, expires_at, claimed_at
 		FROM transfers
 		WHERE solana_tx_hash = $1
-	`, hash).Scan(&tx)
+	`, hash).Scan(
+		&tx.ID,
+		&tx.SenderID,
+		&tx.RecipientID,
+		&tx.AmountUSDT,
+		&tx.FeesUSDT,
+		&tx.Status,
+		&tx.SolanaTxHash,
+		&tx.CreatedAt,
+		&tx.ExpiresAt,
+		&tx.ClaimedAt,
+	)
 	return &tx, err
 }
 
 func (r *TransferRepo) UpdateTransferStatus(id uint, status string, claimedAt *time.Time) error {
-	updates := map[string]any{"status": status}
-	if claimedAt != nil {
-		updates["claimed_at"] = claimedAt
-	}
-	return r.db.GetPool().QueryRow(context.Background(), `
+	_, err := r.db.GetPool().Exec(context.Background(), `
 		UPDATE transfers
 		SET status = $1, claimed_at = $2
 		WHERE id = $3
-	`, updates["status"], updates["claimed_at"], id).Scan(&id)
+	`, status, claimedAt, id)
+	return err
 }
 
 // InvalidateTransferCaches – invalide les caches de l'expéditeur et du destinataire
@@ -83,15 +102,14 @@ func (r *TransferRepo) InvalidateTransferCaches(senderID, recipientID uint, user
 func InsertTransfer(ctx context.Context, tx pgx.Tx, t *models.Transfer) error {
 	query := `
         INSERT INTO transfers (
-            id, sender_id, recipient_id, amount_usdt, fees_usdt, status, solana_tx_hash, expires_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            sender_id, recipient_id, amount_usdt, fees_usdt, status, solana_tx_hash, expires_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
     `
 
 	err := tx.QueryRow(
 		ctx,
 		query,
-		t.ID,
 		t.SenderID,
 		t.RecipientID,
 		t.AmountUSDT,
