@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
+    password VARCHAR(255) NOT NULL,
     phone_number VARCHAR(20) UNIQUE NOT NULL,
     solana_pubkey VARCHAR(44) NOT NULL,
     encrypted_priv_key TEXT NOT NULL,

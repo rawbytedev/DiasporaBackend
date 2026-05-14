@@ -20,22 +20,20 @@ func NewTransferRepo(cache *cache.CacheStore, db *db.PostgresDB) *TransferRepo {
 	return &TransferRepo{cache: cache, db: db}
 }
 
-func (r *TransferRepo) CreateTransfer(tx *models.Transfer) error {
-	dbTx, err := r.db.GetPool().Begin(context.Background())
+func (r *TransferRepo) CreateTransfer(ctx context.Context, tx *models.Transfer) error {
+	dbTx, err := r.db.BeginTx(ctx)
 	if err != nil {
 		return err
 	}
 
-	if err := InsertTransfer(context.Background(), dbTx, tx); err != nil {
+	if err := InsertTransfer(ctx, dbTx, tx); err != nil {
 		return err
 	}
-
-	dbTxCtx := context.Background()
 	defer func() {
 		if err != nil {
-			dbTx.Rollback(dbTxCtx)
+			dbTx.Rollback(ctx)
 		} else {
-			dbTx.Commit(dbTxCtx)
+			dbTx.Commit(ctx)
 		}
 	}()
 	return nil

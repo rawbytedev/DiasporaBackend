@@ -7,6 +7,7 @@ import (
 	"Diaspora/internal/solana"
 	"Diaspora/internal/utils"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"time"
 )
@@ -21,36 +22,64 @@ func NewUserRepo(cache *cache.CacheStore, db *db.PostgresDB) *UserRepo {
 }
 
 // CreateUser – stocke en DB, pas de cache direct
-func (r *UserRepo) CreateUser(user *models.User, passw string) error {
+func (r *UserRepo) CreateUser(ctx context.Context, user *models.User, passw string) error {
 	solanaPubkey, encryptedPrivKey, err := utils.NewSolanaAddress()
 	if err != nil {
 		return err
 	}
 	user.SolanaPubkey = solanaPubkey
-	user.MockPrivKey = encryptedPrivKey
-	user.EncryptedPrivKey = user.MockPrivKey.String() // In a real implementation, this would be properly encrypted with a server-side key
+	user.EncryptedPrivKey = base64.StdEncoding.EncodeToString(encryptedPrivKey) // store as string (or hex)
 	user.CreatedAt = time.Now()
 	user.StateVersion = 1
-	user.ID = uint(time.Now().UnixNano()) // simple ID generation for example, use a better method in production
-	// we avoid storing password in the User struct, it is stored separately in the database for authentication purposes
-	return r.db.GetPool().QueryRow(context.Background(), "INSERT INTO users (id ,phone_number, solana_pubkey, encrypted_priv_key, name, password) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id", user.PhoneNumber, user.SolanaPubkey, user.EncryptedPrivKey, user.Name, passw).Scan(&user.ID)
+
+	dbTx, err := r.db.BeginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			dbTx.Rollback(ctx)
+		} else {
+			dbTx.Commit(ctx)
+		}
+	}()
+
+	err = dbTx.QueryRow(ctx, `
+        INSERT INTO users (phone_number, solana_pubkey, encrypted_priv_key, name, password)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id`,
+		user.PhoneNumber, user.SolanaPubkey, user.EncryptedPrivKey, user.Name, passw,
+	).Scan(&user.ID)
+
+	return err
 }
 
 // GetUserByPhone – avec cache
-func (r *UserRepo) GetUserByPhone(phone string) (*models.User, error) {
+func (r *UserRepo) GetUserByPhone(ctx context.Context, phone string) (*models.User, error) {
 	key := fmt.Sprintf("user:phone:%s", phone)
 	var user models.User
-	err := r.cache.Get(context.Background(), key, &user)
+	err := r.cache.Get(ctx, key, &user)
 	if err == nil {
 		return &user, nil
 	}
+	dbTx, err := r.db.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			dbTx.Rollback(ctx)
+		} else {
+			dbTx.Commit(ctx)
+		}
+	}()
 	// cache miss
-	err = r.db.GetPool().QueryRow(context.Background(), "SELECT id, phone_number, solana_pubkey, encrypted_priv_key, name, state_version, created_at FROM users WHERE phone_number = $1", phone).Scan(&user.ID, &user.PhoneNumber, &user.SolanaPubkey, &user.EncryptedPrivKey, &user.Name, &user.StateVersion, &user.CreatedAt)
+	err = dbTx.QueryRow(ctx, "SELECT id, phone_number, solana_pubkey, encrypted_priv_key, name, state_version, created_at FROM users WHERE phone_number = $1", phone).Scan(&user.ID, &user.PhoneNumber, &user.SolanaPubkey, &user.EncryptedPrivKey, &user.Name, &user.StateVersion, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
 	// stocker en cache pour 5 minutes
-	_ = r.cache.Set(context.Background(), key, user) // with expiration if supported 5*time.Minute
+	_ = r.cache.Set(ctx, key, user) // with expiration if supported 5*time.Minute
 	return &user, nil
 }
 
@@ -117,4 +146,8 @@ func (r *UserRepo) VerifyOTP(phone, otp string) error {
 		return fmt.Errorf("invalid OTP")
 	}
 	return nil
+}
+
+func (r *UserRepo) Close() error {
+	return r.cache.Close()
 }

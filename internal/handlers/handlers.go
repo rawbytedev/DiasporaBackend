@@ -17,23 +17,30 @@ func Register(userRepo *repository.UserRepo) http.HandlerFunc {
 		r.ParseForm()
 		phone := r.Form.Get("phone")
 		name := r.Form.Get("name")
-		password := r.Form.Get("password")                                                    // for authentication
-		hashed, err := bcrypt.GenerateFromPassword([]byte(password)[:72], bcrypt.DefaultCost) // bcrypt has a max password length of 72 bytes, we hash it first to ensure consistent length
-		passwordHash := hex.EncodeToString(sha256.New().Sum(hashed))
-		if err != nil {
-			http.Error(w, "failed to hash password", http.StatusInternalServerError)
-			return
-		}
+
+		password := r.Form.Get("password") // for authentication
+		// validation des champs
 		if phone == "" || name == "" {
 			http.Error(w, "missing phone or name", http.StatusBadRequest)
 			return
 		}
+		if password == "" {
+			http.Error(w, "missing password", http.StatusBadRequest)
+			return
+		}
+		shaHash := sha256.New().Sum([]byte(password))
+		hashed, err := bcrypt.GenerateFromPassword(shaHash[:], bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, "failed to hash password", http.StatusInternalServerError)
+			return
+		}
+		hashedPassword := hex.EncodeToString(hashed)
 		// créer utilisateur en DB
 		user := &models.User{
 			PhoneNumber: phone,
 			Name:        name,
 		}
-		err = userRepo.CreateUser(user, passwordHash) // stocke un hash du mot de passe pour vérification lors du login
+		err = userRepo.CreateUser(r.Context(), user, hashedPassword) // stocke un hash du mot de passe pour vérification lors du login
 		if err != nil {
 			http.Error(w, "failed to create user", http.StatusInternalServerError)
 			return
@@ -50,7 +57,7 @@ func Login(userRepo *repository.UserRepo) http.HandlerFunc {
 			http.Error(w, "missing phone or password", http.StatusBadRequest)
 			return
 		}
-		_, err := userRepo.GetUserByPhone(phone)
+		_, err := userRepo.GetUserByPhone(r.Context(), phone)
 		if err != nil {
 			http.Error(w, "user not found", http.StatusUnauthorized)
 			return
@@ -60,7 +67,13 @@ func Login(userRepo *repository.UserRepo) http.HandlerFunc {
 			http.Error(w, "failed to retrieve password hash", http.StatusInternalServerError)
 			return
 		}
-		err = bcrypt.CompareHashAndPassword([]byte(userPasswordHash), []byte(password))
+		shaHash := sha256.New().Sum([]byte(password))
+		passw, err := hex.DecodeString(userPasswordHash)
+		if err != nil {
+			http.Error(w, "failed to retrieve password hash", http.StatusInternalServerError)
+			return
+		}
+		err = bcrypt.CompareHashAndPassword(passw, shaHash[:])
 		if err != nil {
 			http.Error(w, "invalid password", http.StatusUnauthorized)
 			return
