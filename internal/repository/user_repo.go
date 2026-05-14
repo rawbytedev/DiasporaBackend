@@ -13,16 +13,54 @@ import (
 )
 
 type UserRepo struct {
-	cache *cache.CacheStore
-	db    *db.PostgresDB
+	cache  *cache.CacheStore
+	db     *db.PostgresDB
+	client *solana.Client
 }
 
-func (r *UserRepo) DebitBalance(userID uint, amount string) {
-	
+func (r *UserRepo) GetUserByID(context context.Context, userID uint) (*models.User, error) {
+	var user models.User
+	err := r.cache.Get(context, fmt.Sprintf("user:id:%d", userID), &user)
+	if err == nil {
+		return &user, nil
+	}
+	dbTx, err := r.db.BeginTx(context)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			dbTx.Rollback(context)
+		} else {
+			dbTx.Commit(context)
+		}
+	}()
+	dbTx.QueryRow(context, "SELECT id, phone_number, solana_pubkey, encrypted_priv_key, name, state_version, created_at FROM users WHERE id = $1", userID).Scan(&user.ID, &user.PhoneNumber, &user.SolanaPubkey, &user.EncryptedPrivKey, &user.Name, &user.StateVersion, &user.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *UserRepo) DebitBalance(userID uint, amount string) error {
+	var user models.User
+	err := r.db.GetPool().QueryRow(context.Background(), "SELECT id, phone_number, solana_pubkey, encrypted_priv_key, name, state_version, created_at FROM users WHERE id = $1", userID).Scan(&user.ID, &user.PhoneNumber, &user.SolanaPubkey, &user.EncryptedPrivKey, &user.Name, &user.StateVersion, &user.CreatedAt)
+	if err != nil {
+		return err
+	}
+	balance, err := r.client.GetTokenBalance(user.SolanaPubkey)
+	if err != nil {
+		return err
+	}
+	if balance < utils.ParseAmount(amount) {
+		return fmt.Errorf("insufficient balance")
+	}
+	// implémenter la débit du solde
+	return nil
 }
 
 func NewUserRepo(cache *cache.CacheStore, db *db.PostgresDB) *UserRepo {
-	return &UserRepo{cache: cache, db: db}
+	return &UserRepo{cache: cache, db: db /* client: solana.NewClient()*/}
 }
 
 // CreateUser – stocke en DB, pas de cache direct

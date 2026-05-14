@@ -6,6 +6,7 @@ import (
 	"Diaspora/internal/repository"
 	"crypto/sha256"
 	"encoding/hex"
+	"internal/itoa"
 	"net/http"
 
 	"golang.org/x/crypto/bcrypt"
@@ -91,9 +92,20 @@ func Withdraw(userRepo *repository.UserRepo, mobileMoneyClient *mobilemoney.Clie
 		r.ParseForm()
 		userID := r.Context().Value("userID").(uint)
 		amount := r.Form.Get("amount")
-		userRepo.DebitBalance(userID, amount)
+
+		err := userRepo.DebitBalance(userID, amount)
+		if err != nil {
+			http.Error(w, "failed to debit balance", http.StatusInternalServerError)
+			return
+		}
+		user, err := userRepo.GetUserByID(r.Context(), userID) // récupère le solde mis à jour
+		if err != nil {
+			http.Error(w, "failed to retrieve user", http.StatusInternalServerError)
+			return
+		}
 		userRepo.InvalidateUser(userID) // invalide le cache de l'utilisateur pour forcer une mise à jour du solde
-		mobileMoneyClient.SendMoney(userID, amount)
+		amountValue := itoa.Atoi(amount)
+		mobileMoneyClient.SendMoney(user.PhoneNumber, float64(amountValue), "mtn")
 	}
 }
 func VerifyOTP(userRepo *repository.UserRepo) http.HandlerFunc {
