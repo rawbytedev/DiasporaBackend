@@ -14,7 +14,7 @@ import (
 // specific error conditions or inspect call history.
 type MockSolanaClient struct {
 	mu      sync.Mutex
-	counter uint64 // used for deterministic hash generation
+	counter uint64
 
 	initiateError error
 	claimError    error
@@ -25,17 +25,18 @@ type MockSolanaClient struct {
 	transferHistory map[string]TransferRecord
 }
 
-// TransferRecord is a snapshot of a single on-chain transfer stored by the mock.
+// TransferRecord is a snapshot of a single in-memory transfer stored by the mock.
 type TransferRecord struct {
 	SenderID    uint
 	RecipientID uint
 	NetAmount   float64
 	Fees        float64
+	Nonce       uint64
 	Status      string // "pending" | "claimed" | "refunded"
 }
 
-// NewMockSolanaClient returns a MockSolanaClient with a default mock balance of
-// 1 000 USDT and an empty transfer history.
+// NewMockSolanaClient returns a MockSolanaClient with a default mock balance
+// of 1 000 USDT and an empty transfer history.
 func NewMockSolanaClient() *MockSolanaClient {
 	return &MockSolanaClient{
 		mockBalance:     1000.0,
@@ -43,13 +44,14 @@ func NewMockSolanaClient() *MockSolanaClient {
 	}
 }
 
-// InitiateTransfer records the transfer and returns a deterministic fake hash.
-func (m *MockSolanaClient) InitiateTransfer(senderID uint, recipientID uint, netAmount float64, fees float64) (string, error) {
+// InitiateTransfer records the transfer and returns a deterministic fake hash
+// plus a monotonically increasing nonce.
+func (m *MockSolanaClient) InitiateTransfer(senderID, recipientID uint, netAmount, fees float64) (string, uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.initiateError != nil {
-		return "", m.initiateError
+		return "", 0, m.initiateError
 	}
 
 	n := atomic.AddUint64(&m.counter, 1)
@@ -60,9 +62,10 @@ func (m *MockSolanaClient) InitiateTransfer(senderID uint, recipientID uint, net
 		RecipientID: recipientID,
 		NetAmount:   netAmount,
 		Fees:        fees,
+		Nonce:       n,
 		Status:      "pending",
 	}
-	return txHash, nil
+	return txHash, n, nil
 }
 
 // ClaimTransfer marks the transfer as claimed.
@@ -124,39 +127,33 @@ func (m *MockSolanaClient) GetTransactionStatus(txHash string) (string, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Test helpers (not part of the interface)
+// Test helpers
 // ---------------------------------------------------------------------------
 
-// SetMockBalance changes the balance returned by GetTokenBalance.
 func (m *MockSolanaClient) SetMockBalance(balance float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.mockBalance = balance
 }
 
-// SetInitiateError causes the next InitiateTransfer call to return err.
-// Pass nil to clear the error.
 func (m *MockSolanaClient) SetInitiateError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.initiateError = err
 }
 
-// SetClaimError causes the next ClaimTransfer call to return err.
 func (m *MockSolanaClient) SetClaimError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.claimError = err
 }
 
-// SetRefundError causes the next RefundTransfer call to return err.
 func (m *MockSolanaClient) SetRefundError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.refundError = err
 }
 
-// SetBalanceError causes the next GetTokenBalance call to return err.
 func (m *MockSolanaClient) SetBalanceError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

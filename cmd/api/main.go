@@ -39,7 +39,16 @@ func main() {
 	transferRepo := repository.NewTransferRepo(cacheDB, dbPost)
 
 	// ── Solana client ─────────────────────────────────────────────────────────
-	solClient, err := solana.NewClient(cfg.SolanaRPCURL, dbPost, cfg.AdminPrivateKey)
+	// NewClient now accepts the USDT mint address and treasury wallet so it can
+	// derive the fee-treasury ATA and build complete on-chain instructions.
+	solClient, err := solana.NewClient(
+		cfg.SolanaRPCURL,
+		dbPost,
+		cfg.AdminPrivateKey,
+		cfg.SolanaProgramID,
+		cfg.USDTMintAddress,
+		cfg.TreasuryPublicKey,
+	)
 	if err != nil {
 		log.Fatalf("solana client: %v", err)
 	}
