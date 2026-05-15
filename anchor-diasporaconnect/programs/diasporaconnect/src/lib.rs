@@ -7,7 +7,7 @@ declare_id!("5GHE14Zmpq5yNwpvHR2ZLaTcSckp6QogCRNm43M3Z9BT");
 // This will be overwritten during testing via a build script,
 // but for local tests you can manually set it to a test public key.
 // We'll handle it automatically in the test script.
-pub const TREASURY_AUTHORITY: &str = "REPLACE_ME";
+pub const TREASURY_AUTHORITY: &str = "11111111111111111111111111111111";
 
 #[program]
 pub mod diaspora_connect {
