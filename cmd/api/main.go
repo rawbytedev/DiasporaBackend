@@ -34,13 +34,7 @@ func main() {
 	}
 	defer cacheDB.Close()
 
-	// ── Repositories ──────────────────────────────────────────────────────────
-	userRepo := repository.NewUserRepo(cacheDB, dbPost)
-	transferRepo := repository.NewTransferRepo(cacheDB, dbPost)
-
 	// ── Solana client ─────────────────────────────────────────────────────────
-	// NewClient now accepts the USDT mint address and treasury wallet so it can
-	// derive the fee-treasury ATA and build complete on-chain instructions.
 	solClient, err := solana.NewClient(
 		cfg.SolanaRPCURL,
 		dbPost,
@@ -52,6 +46,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("solana client: %v", err)
 	}
+
+	// ── Repositories ──────────────────────────────────────────────────────────
+	userRepo := repository.NewUserRepo(cacheDB, dbPost, solClient)
+	transferRepo := repository.NewTransferRepo(cacheDB, dbPost)
 
 	// ── Mobile money client ───────────────────────────────────────────────────
 	mmClient := mobilemoney.NewClient(cfg.MobileMoneyAPIURL, cfg.MobileMoneyAPIKey, cfg.MobileMoneyAPISecret)

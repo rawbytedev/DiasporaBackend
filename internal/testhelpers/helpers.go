@@ -6,6 +6,8 @@ import (
 	"Diaspora/internal/models"
 	"context"
 	"fmt"
+	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -22,9 +24,10 @@ type TestDB struct {
 }
 
 type TestContext struct {
-	DB    *TestDB
-	Cache *cache.CacheStore
-	T     *testing.T
+	DB        *TestDB
+	Cache     *cache.CacheStore
+	CachePath string
+	T         *testing.T
 }
 
 // InitializeTestDatabase creates all necessary tables for tests
@@ -53,6 +56,7 @@ func InitializeTestDatabase(ctx context.Context, postgresDB *db.PostgresDB) erro
 			fees_usdt DECIMAL(20,6) NOT NULL,
 			status VARCHAR(20) DEFAULT 'pending',
 			solana_tx_hash VARCHAR(88) UNIQUE NOT NULL,
+			escrow_nonce BIGINT NOT NULL DEFAULT 0,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			expires_at TIMESTAMP NOT NULL,
 			claimed_at TIMESTAMP
@@ -89,6 +93,10 @@ func InitializeTestDatabase(ctx context.Context, postgresDB *db.PostgresDB) erro
 		return fmt.Errorf("failed to create transfers table: %w", err)
 	}
 
+	if _, err := pool.Exec(ctx, `ALTER TABLE transfers ADD COLUMN IF NOT EXISTS escrow_nonce BIGINT NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("failed to add escrow_nonce to transfers table: %w", err)
+	}
+
 	if _, err := pool.Exec(ctx, withdrawalsSQL); err != nil {
 		return fmt.Errorf("failed to create withdrawals table: %w", err)
 	}
@@ -97,7 +105,7 @@ func InitializeTestDatabase(ctx context.Context, postgresDB *db.PostgresDB) erro
 
 // SetupTestDB initializes test database
 func SetupTestDB(t *testing.T) *TestDB {
-	postgresDB, err := db.NewPostgresDBWithConfig(TestDBDSN, 3, 1)
+	postgresDB, err := db.NewPostgresDBWithConfig(TestDBDSN, 1, 0)
 	if err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
@@ -123,7 +131,11 @@ func SetupTestDB(t *testing.T) *TestDB {
 func SetupTestContext(t *testing.T) *TestContext {
 	testDB := SetupTestDB(t)
 
-	cachePath := t.TempDir()
+	cachePath, err := os.MkdirTemp("", "cache-test-")
+	if err != nil {
+		testDB.Close()
+		t.Fatalf("Failed to create cache temp dir: %v", err)
+	}
 	testCache, err := cache.NewCache(cachePath, nil)
 	if err != nil {
 		defer testDB.Close()
@@ -131,9 +143,10 @@ func SetupTestContext(t *testing.T) *TestContext {
 	}
 
 	tc := &TestContext{
-		DB:    testDB,
-		Cache: testCache,
-		T:     t,
+		DB:        testDB,
+		Cache:     testCache,
+		CachePath: cachePath,
+		T:         t,
 	}
 
 	return tc
@@ -153,6 +166,11 @@ func (tc *TestContext) Close() {
 	}
 	if tc.Cache != nil {
 		tc.Cache.Close()
+		runtime.GC()
+		time.Sleep(100 * time.Millisecond)
+		if tc.CachePath != "" {
+			_ = os.RemoveAll(tc.CachePath)
+		}
 	}
 }
 
@@ -216,11 +234,10 @@ func (tc *TestContext) CreateTestTransfer(senderID, recipientID uint, amount, fe
 	defer cancel()
 
 	err := tc.DB.GetPool().QueryRow(ctx, `
-		INSERT INTO transfers (sender_id, recipient_id, amount_usdt, fees_usdt, status, solana_tx_hash, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id
-	`, transfer.SenderID, transfer.RecipientID, transfer.AmountUSDT, transfer.FeesUSDT, transfer.Status, transfer.SolanaTxHash, transfer.CreatedAt, transfer.ExpiresAt).Scan(&transfer.ID)
-
+			INSERT INTO transfers (sender_id, recipient_id, amount_usdt, fees_usdt, status, solana_tx_hash, escrow_nonce, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			RETURNING id
+		`, transfer.SenderID, transfer.RecipientID, transfer.AmountUSDT, transfer.FeesUSDT, transfer.Status, transfer.SolanaTxHash, 0, transfer.CreatedAt, transfer.ExpiresAt).Scan(&transfer.ID)
 	return transfer, err
 }
 

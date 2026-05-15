@@ -15,7 +15,7 @@ import (
 type UserRepo struct {
 	cache  *cache.CacheStore
 	db     *db.PostgresDB
-	client *solana.Client
+	client solana.ClientInterface
 }
 
 func (r *UserRepo) GetUserByID(context context.Context, userID uint) (*models.User, error) {
@@ -35,7 +35,7 @@ func (r *UserRepo) GetUserByID(context context.Context, userID uint) (*models.Us
 			dbTx.Commit(context)
 		}
 	}()
-	dbTx.QueryRow(context, "SELECT id, phone_number, solana_pubkey, encrypted_priv_key, name, state_version, created_at FROM users WHERE id = $1", userID).Scan(&user.ID, &user.PhoneNumber, &user.SolanaPubkey, &user.EncryptedPrivKey, &user.Name, &user.StateVersion, &user.CreatedAt)
+	err = dbTx.QueryRow(context, "SELECT id, phone_number, solana_pubkey, encrypted_priv_key, name, state_version, created_at FROM users WHERE id = $1", userID).Scan(&user.ID, &user.PhoneNumber, &user.SolanaPubkey, &user.EncryptedPrivKey, &user.Name, &user.StateVersion, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +59,12 @@ func (r *UserRepo) DebitBalance(userID uint, amount string) error {
 	return nil
 }
 
-func NewUserRepo(cache *cache.CacheStore, db *db.PostgresDB) *UserRepo {
-	return &UserRepo{cache: cache, db: db /* client: solana.NewClient()*/}
+func NewUserRepo(cache *cache.CacheStore, db *db.PostgresDB, client solana.ClientInterface) *UserRepo {
+	return &UserRepo{cache: cache, db: db, client: client}
+}
+
+func NewUserRepoWithClient(cache *cache.CacheStore, db *db.PostgresDB, client solana.ClientInterface) *UserRepo {
+	return &UserRepo{cache: cache, db: db, client: client}
 }
 
 // CreateUser – stocke en DB, pas de cache direct
@@ -127,8 +131,7 @@ func (r *UserRepo) GetUserByPhone(ctx context.Context, phone string) (*models.Us
 
 // InvalidateUser – appelé après modification (envoi, réclamation, etc.)
 func (r *UserRepo) InvalidateUser(userID uint) error {
-	prefix := fmt.Sprintf("user:%d:", userID)
-	return r.cache.InvalidatePrefix(context.Background(), prefix)
+	return r.cache.InvalidatePrefix(context.Background(), "user:")
 }
 
 // GetUserBalance – lit depuis Solana (ou cache balance)
@@ -157,7 +160,7 @@ func (r *UserRepo) UpdateStateVersion(userID uint) error {
 	if err != nil {
 		return err
 	}
-	return nil
+	return r.InvalidateUser(userID)
 }
 
 func (r *UserRepo) RetrievePasswordHash(phone string) (string, error) {

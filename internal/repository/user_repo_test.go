@@ -17,7 +17,7 @@ func TestUserRepository(t *testing.T) {
 	defer testCtx.Close()
 	defer testCtx.TruncateAllTables()
 
-	userRepo := repository.NewUserRepo(testCtx.Cache, testCtx.DB.PostgresDB)
+	userRepo := repository.NewUserRepo(testCtx.Cache, testCtx.DB.PostgresDB, nil)
 
 	tests := []struct {
 		name      string

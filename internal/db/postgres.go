@@ -40,14 +40,14 @@ func NewPostgresDBWithConfig(dsn string, maxConns int32, minConns int32) (*Postg
 	if err != nil {
 		return nil, err
 	}
-	if maxConns < defaultMinConns {
+	if maxConns < 1 {
 		maxConns = defaultMaxConns
 	}
-	if minConns < defaultMinConns {
-		minConns = defaultMinConns
+	if minConns < 0 {
+		minConns = 0
 	}
 	if minConns > maxConns {
-		minConns = defaultMinConns
+		minConns = 0
 	}
 	config.MaxConns = maxConns
 	config.MinConns = minConns
