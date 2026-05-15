@@ -57,7 +57,10 @@ func SendTransfer(userRepo *repository.UserRepo, transferRepo *repository.Transf
 		fees := req.AmountUSDT * 0.01
 		netAmount := req.AmountUSDT - fees
 
-		txHash, err := solClient.InitiateTransfer(userID, recipient.ID, netAmount, fees)
+		// Submit the on-chain initiate_transfer instruction.
+		// The returned nonce must be persisted alongside the transaction hash so
+		// ClaimTransfer / RefundTransfer can reconstruct the escrow PDA.
+		txHash, nonce, err := solClient.InitiateTransfer(userID, recipient.ID, netAmount, fees)
 		if err != nil {
 			middleware.JSONError(w, http.StatusInternalServerError, "blockchain error: "+err.Error())
 			return
@@ -69,6 +72,7 @@ func SendTransfer(userRepo *repository.UserRepo, transferRepo *repository.Transf
 			AmountUSDT:   netAmount,
 			FeesUSDT:     fees,
 			SolanaTxHash: txHash,
+			EscrowNonce:  nonce,
 			Status:       "pending",
 			ExpiresAt:    time.Now().Add(7 * 24 * time.Hour),
 		}

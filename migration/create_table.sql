@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS transfers (
     fees_usdt DECIMAL(20,6) NOT NULL,
     status VARCHAR(20) DEFAULT 'pending',
     solana_tx_hash VARCHAR(88) UNIQUE NOT NULL,
+    -- escrow_nonce is the random u64 PDA seed generated at initiation time.
+    -- Required to reconstruct escrow / vault PDAs for claim and refund.
+    escrow_nonce BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NOT NULL,
     claimed_at TIMESTAMP
