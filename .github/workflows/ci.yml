@@ -16,8 +16,8 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: diaspora
-          POSTGRES_PASSWORD: diaspora
+          POSTGRES_USER: AdminDias
+          POSTGRES_PASSWORD: Admin
           POSTGRES_DB: diaspora_test
         ports: ["5432:5432"]
         options: >-
@@ -27,7 +27,7 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: "postgres://diaspora:diaspora@localhost:5432/diaspora_test?sslmode=disable"
+      DATABASE_URL: "postgres://AdminDias:Admin@localhost:5432/diaspora_test?sslmode=disable"
       JWT_SECRET: "ci-test-secret"
       SOLANA_RPC_URL: "https://api.devnet.solana.com"
       ADMIN_PRIVATE_KEY: ""
@@ -103,6 +103,7 @@ jobs:
       - name: Install all depencies
         run: |
           curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
+          echo "$HOME/.local/share/solana/install/active_version/bin" >> $GITHUB_PATH
 
       - name: Build Anchor program
         working-directory: anchor-diasporaconnect
@@ -110,19 +111,25 @@ jobs:
           TREASURY_PUBLIC_KEY: "11111111111111111111111111111111"
         run: |
           # Patch TREASURY_AUTHORITY for CI build
-          sed -i "s|pub const TREASURY_AUTHORITY: &str = \".*\";|pub const TREASURY_AUTHORITY: \&str = \"11111111111111111111111111111111\";|g" \
+          sed -i 's|pub const TREASURY_AUTHORITY: &str = "[^"]*";|pub const TREASURY_AUTHORITY: \&str = "11111111111111111111111111111111";|g' \
             programs/diasporaconnect/src/lib.rs
           anchor build
 
       - name: Run Anchor tests (localnet)
         working-directory: anchor-diasporaconnect
         run: |
-          # Start test validator in background
+          # Start test validator in background with proper logging
           solana-test-validator --reset --quiet &
           VALIDATOR_PID=$!
-          sleep 5
-          anchor test --skip-local-validator || true
+          sleep 8
+          # Run tests and capture the exit code
+          anchor test --skip-local-validator
+          TEST_EXIT_CODE=$?
+          # Kill the validator process
           kill $VALIDATOR_PID 2>/dev/null || true
+          wait $VALIDATOR_PID 2>/dev/null || true
+          # Exit with the test exit code
+          exit $TEST_EXIT_CODE
 
   # ── Security scan ───────────────────────────────────────────────────────────
   security:
