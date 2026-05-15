@@ -1,0 +1,20 @@
+# Binaries
+bin/
+
+# BadgerDB runtime data
+badger_data/
+
+# Contract build artifacts
+target/
+.anchor/
+.contract-info.json
+
+# Go test cache
+*.test
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db

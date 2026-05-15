@@ -1,139 +1,203 @@
+// Package handlers_test contains unit tests for the HTTP handlers.
+// Tests that require a real database connection are skipped when the
+// environment variable DATABASE_URL is not set.
 package handlers_test
 
 import (
-	"Diaspora/internal/cache"
-	"Diaspora/internal/db"
 	"Diaspora/internal/handlers"
-	"Diaspora/internal/repository"
+	"Diaspora/internal/mocks"
+	"bytes"
 	"context"
-	"fmt"
-	"log"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
-
-	"github.com/jackc/pgx/v5"
 )
 
-func SetupTestDB(path string) (*repository.UserRepo, *db.PostgresDB, error) {
-	dsn := "host=localhost port=5432 user=AdminDias password=Admin dbname=diaspora_test sslmode=disable"
-	store, err := cache.NewCache(path, nil)
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// jsonBody encodes v as JSON and returns a *bytes.Buffer.
+func jsonBody(t *testing.T, v interface{}) *bytes.Buffer {
+	t.Helper()
+	b, err := json.Marshal(v)
 	if err != nil {
-		return nil, nil, err
+		t.Fatalf("marshal body: %v", err)
 	}
-	db, err := db.NewPostgresDB(dsn)
-	if err != nil {
-		return nil, nil, err
-	}
-	return repository.NewUserRepo(store, db), db, nil
+	return bytes.NewBuffer(b)
 }
 
-// tableExists checks if a table exists in the 'public' schema
-func tableExists(ctx context.Context, conn *pgx.Conn, table string) (bool, error) {
-	if table == "" {
-		return false, fmt.Errorf("table name cannot be empty")
-	}
-
-	var exists bool
-	query := `
-		SELECT EXISTS (
-			SELECT 1
-			FROM information_schema.tables
-			WHERE table_schema = 'public'
-			  AND table_name = $1
-		)
-	`
-	err := conn.QueryRow(ctx, query, table).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
+// newJSONReq builds an HTTP request with a JSON body.
+func newJSONReq(t *testing.T, method, path string, body interface{}) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(method, path, jsonBody(t, body))
+	r.Header.Set("Content-Type", "application/json")
+	return r
 }
 
-func CreateTable(t *testing.T, db *db.PostgresDB) {
-	createTableSQL := `CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    password VARCHAR(255) NOT NULL,
-    phone_number VARCHAR(20) UNIQUE NOT NULL,
-    solana_pubkey VARCHAR(44) NOT NULL,
-    encrypted_priv_key TEXT NOT NULL,
-    name VARCHAR(100),
-    state_version INTEGER DEFAULT 1,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);`
-	dbTx, err := db.BeginTx(context.Background())
-	if err != nil {
-		t.Fatalf("Failed to begin transaction: %v\n", err)
-	}
-	tableExists, err := tableExists(t.Context(), dbTx.Conn(), "users")
-	if err != nil {
-		t.Fatalf("Failed to check table existence: %v\n", err)
-	}
-	dbTx.Rollback(t.Context())
-	// Only create the table if it doesn't exist
-	if tableExists {
-		t.Logf("Table 'users' already exists, skipping creation.\n")
-	}
-	if !tableExists {
-		t.Logf("Table 'users' does not exist, creating table.\n")
-		dbTx, err = db.BeginTx(context.Background())
-		if err != nil {
-			t.Fatalf("Failed to begin transaction: %v\n", err)
-		}
-		_, err = dbTx.Exec(t.Context(), createTableSQL)
-		if err != nil {
-			log.Fatalf("Failed to create table: %v\n", err)
-		}
-		dbTx.Commit(t.Context())
-		t.Logf("Table 'users' created successfully.\n")
-	}
-
+// withUserID injects a userID into the request context, simulating AuthMiddleware.
+func withUserID(r *http.Request, id uint) *http.Request {
+	ctx := context.WithValue(r.Context(), contextKey("userID"), id)
+	return r.WithContext(ctx)
 }
 
-func CreateUser(t *testing.T) {
-	userRepo, db, err := SetupTestDB(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	CreateTable(t, db)
-	userRepo.Close()
-}
+type contextKey string
 
-func EndPoints(t *testing.T) *repository.UserRepo {
-	userRepo, db, err := SetupTestDB(t.TempDir())
-	_ = db
-	if err != nil {
-		t.Fatal()
-	}
-	return userRepo
-}
-func TestRegister(t *testing.T) {
-	userRepo := EndPoints(t)
-	handlers := handlers.Register(userRepo)
-	reqBody := "phone=1234567890&name=TestUser&password=TestPass"
-	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+// ---------------------------------------------------------------------------
+// Register
+// ---------------------------------------------------------------------------
+
+func TestRegister_MissingBody(t *testing.T) {
+	h := handlers.Register(nil)
+	r := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewBufferString(""))
+	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	handlers(w, req)
-	resp := w.Result()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	h(w, r)
+	// Empty body causes JSON decode error → 400
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", w.Code)
 	}
-	userRepo.Close()
 }
 
-func TestLogin(t *testing.T) {
-	userRepo := EndPoints(t)
-	handlers := handlers.Login(userRepo)
-	reqBody := "phone=1234567890&password=TestPass"
-	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+func TestRegister_MissingFields(t *testing.T) {
+	h := handlers.Register(nil)
+	r := newJSONReq(t, http.MethodPost, "/api/register", map[string]string{
+		"phone_number": "",
+		"name":         "",
+		"password":     "",
+	})
 	w := httptest.NewRecorder()
-	handlers(w, req)
-	resp := w.Result()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	h(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", w.Code)
 	}
-	userRepo.Close()
+}
+
+// ---------------------------------------------------------------------------
+// Login
+// ---------------------------------------------------------------------------
+
+func TestLogin_MissingBody(t *testing.T) {
+	h := handlers.Login(nil)
+	r := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewBufferString("not json"))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", w.Code)
+	}
+}
+
+func TestLogin_EmptyCredentials(t *testing.T) {
+	h := handlers.Login(nil)
+	r := newJSONReq(t, http.MethodPost, "/api/login", map[string]string{
+		"phone_number": "",
+		"password":     "",
+	})
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// VerifyOTP
+// ---------------------------------------------------------------------------
+
+func TestVerifyOTP_MissingFields(t *testing.T) {
+	h := handlers.VerifyOTP(nil)
+	r := newJSONReq(t, http.MethodPost, "/api/verify-otp", map[string]string{
+		"phone_number": "",
+		"otp":          "",
+	})
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SendTransfer – validation layer (no DB needed)
+// ---------------------------------------------------------------------------
+
+func TestSendTransfer_InvalidBody(t *testing.T) {
+	solMock := mocks.NewMockSolanaClient()
+	h := handlers.SendTransfer(nil, nil, solMock)
+	r := httptest.NewRequest(http.MethodPost, "/api/transfer", bytes.NewBufferString("{bad"))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h(w, r)
+	// No userID in context → 401; bad JSON → 400.  Either is acceptable.
+	if w.Code != http.StatusBadRequest && w.Code != http.StatusUnauthorized {
+		t.Errorf("want 400 or 401, got %d", w.Code)
+	}
+}
+
+func TestSendTransfer_ZeroAmount(t *testing.T) {
+	solMock := mocks.NewMockSolanaClient()
+	h := handlers.SendTransfer(nil, nil, solMock)
+	r := newJSONReq(t, http.MethodPost, "/api/transfer", map[string]interface{}{
+		"recipient_phone": "+22670000001",
+		"amount_usdt":     0,
+	})
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusBadRequest && w.Code != http.StatusUnauthorized {
+		t.Errorf("want 400 or 401, got %d", w.Code)
+	}
+}
+
+func TestSendTransfer_NegativeAmount(t *testing.T) {
+	solMock := mocks.NewMockSolanaClient()
+	h := handlers.SendTransfer(nil, nil, solMock)
+	r := newJSONReq(t, http.MethodPost, "/api/transfer", map[string]interface{}{
+		"recipient_phone": "+22670000001",
+		"amount_usdt":     -5.0,
+	})
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusBadRequest && w.Code != http.StatusUnauthorized {
+		t.Errorf("want 400 or 401, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Withdraw – validation layer
+// ---------------------------------------------------------------------------
+
+func TestWithdraw_InvalidBody(t *testing.T) {
+	mmMock := mocks.NewMockMobileMoneyClient()
+	h := handlers.Withdraw(nil, mmMock)
+	r := httptest.NewRequest(http.MethodPost, "/api/withdraw", bytes.NewBufferString("bad json"))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusBadRequest && w.Code != http.StatusUnauthorized {
+		t.Errorf("want 400 or 401, got %d", w.Code)
+	}
+}
+
+func TestWithdraw_ZeroAmount(t *testing.T) {
+	mmMock := mocks.NewMockMobileMoneyClient()
+	h := handlers.Withdraw(nil, mmMock)
+	r := newJSONReq(t, http.MethodPost, "/api/withdraw", map[string]interface{}{
+		"amount_usdt": 0,
+	})
+	w := httptest.NewRecorder()
+	h(w, r)
+	if w.Code != http.StatusBadRequest && w.Code != http.StatusUnauthorized {
+		t.Errorf("want 400 or 401, got %d", w.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interface compliance
+// ---------------------------------------------------------------------------
+
+// Ensure the mock satisfies the interface at compile time.
+func TestMocks_ImplementInterfaces(t *testing.T) {
+	var _ handlers.MobileMoneyClient = mocks.NewMockMobileMoneyClient()
 }

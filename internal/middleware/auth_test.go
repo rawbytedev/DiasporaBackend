@@ -11,147 +11,120 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func TestAuthMiddleware(t *testing.T) {
-	// Create test handler
-	testHandler := func(w http.ResponseWriter, r *http.Request) {
-		userID := r.Context().Value("userID")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "userID: %v", userID)
-	}
+// wrongSecret is deliberately different from the package-level secret so we
+// can test that tokens signed with a different key are rejected.
+var wrongSecret = []byte("wrong-secret-key")
 
-	// JWT secret for testing (must match the one in middleware)
-	jwtSecret := []byte("secret")
+// generateTokenWithSecret creates a JWT signed with an arbitrary secret.
+// Use this only to produce intentionally-invalid tokens in tests.
+func generateTokenWithSecret(secret []byte, userID uint, exp time.Duration) string {
+	claims := jwt.MapClaims{
+		"userID": float64(userID),
+		"exp":    time.Now().Add(exp).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	s, _ := token.SignedString(secret)
+	return s
+}
+
+func TestAuthMiddleware(t *testing.T) {
+	// validToken is produced by the middleware's own GenerateToken so it uses
+	// the same secret that AuthMiddleware will validate against.
+	validToken, err := middleware.GenerateToken(123)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
 
 	tests := []struct {
 		name           string
-		token          string
+		authHeader     string
 		expectedStatus int
-		expectedError  bool
 	}{
 		{
 			name:           "Valid token",
-			token:          "Bearer " + generateValidToken(jwtSecret, 123),
+			authHeader:     "Bearer " + validToken,
 			expectedStatus: http.StatusOK,
-			expectedError:  false,
 		},
 		{
 			name:           "Missing authorization header",
-			token:          "",
+			authHeader:     "",
 			expectedStatus: http.StatusUnauthorized,
-			expectedError:  true,
 		},
 		{
-			name:           "Invalid token format - missing Bearer",
-			token:          "InvalidToken",
+			name:           "Invalid format – no Bearer prefix",
+			authHeader:     "InvalidToken",
 			expectedStatus: http.StatusUnauthorized,
-			expectedError:  true,
 		},
 		{
-			name:           "Invalid token format - wrong prefix",
-			token:          "Basic " + generateValidToken(jwtSecret, 123),
+			name:           "Invalid format – wrong scheme",
+			authHeader:     "Basic " + validToken,
 			expectedStatus: http.StatusUnauthorized,
-			expectedError:  true,
 		},
 		{
-			name:           "Invalid token - malformed",
-			token:          "Bearer invalid.token.here",
+			name:           "Malformed token",
+			authHeader:     "Bearer not.a.jwt",
 			expectedStatus: http.StatusUnauthorized,
-			expectedError:  true,
 		},
 		{
-			name:           "Invalid token - wrong secret",
-			token:          "Bearer " + generateValidTokenWithSecret([]byte("wrong_secret"), 123),
+			name:           "Wrong signing secret",
+			authHeader:     "Bearer " + generateTokenWithSecret(wrongSecret, 123, time.Hour),
 			expectedStatus: http.StatusUnauthorized,
-			expectedError:  true,
 		},
 		{
 			name:           "Expired token",
-			token:          generateExpiredToken(jwtSecret, 123),
+			authHeader:     "Bearer " + generateTokenWithSecret([]byte("diaspora-dev-secret-change-in-prod"), 123, -time.Hour),
 			expectedStatus: http.StatusUnauthorized,
-			expectedError:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create request
-			req := httptest.NewRequest("GET", "/test", nil)
-			if tt.token != "" {
-				req.Header.Set("Authorization", tt.token)
-			}
+			handler := middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
 
-			// Create recorder
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
 			w := httptest.NewRecorder()
+			handler(w, req)
 
-			// Apply middleware
-			wrappedHandler := middleware.AuthMiddleware(testHandler)
-			wrappedHandler(w, req)
-
-			resp := w.Result()
-			if resp.StatusCode != tt.expectedStatus {
-				t.Errorf("expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
-			}
-
-			if tt.expectedError && resp.StatusCode == http.StatusOK {
-				t.Error("expected error but got OK status")
+			if w.Code != tt.expectedStatus {
+				t.Errorf("want %d, got %d", tt.expectedStatus, w.Code)
 			}
 		})
 	}
 }
 
 func TestAuthMiddlewareContextInjection(t *testing.T) {
-	jwtSecret := []byte("secret")
-	userID := uint(456)
+	wantID := uint(456)
 
-	contextCapture := ""
-	testHandler := func(w http.ResponseWriter, r *http.Request) {
-		val := r.Context().Value("userID")
-		contextCapture = fmt.Sprintf("%v", val)
+	token, err := middleware.GenerateToken(wantID)
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+generateValidToken(jwtSecret, userID))
+	var gotID uint
+	var ok bool
 
+	handler := middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		gotID, ok = middleware.UserIDFromContext(r.Context())
+		fmt.Fprintf(w, "%d", gotID)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	wrappedHandler := middleware.AuthMiddleware(testHandler)
-	wrappedHandler(w, req)
-	// Verify context was set (this is a simplified check)
-	// In production, you'd verify the actual userID value
-	if contextCapture == "" {
-		t.Error("context value was not set")
+	handler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
 	}
-}
-
-// Helper functions
-func generateValidToken(secret []byte, userID uint) string {
-	claims := jwt.MapClaims{
-		"userID": float64(userID),
-		"exp":    time.Now().Add(time.Hour).Unix(),
+	if !ok {
+		t.Fatal("UserIDFromContext returned ok=false; context value was not set")
 	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, _ := token.SignedString(secret)
-	return tokenString
-}
-
-func generateValidTokenWithSecret(secret []byte, userID uint) string {
-	claims := jwt.MapClaims{
-		"userID": float64(userID),
-		"exp":    time.Now().Add(time.Hour).Unix(),
+	if gotID != wantID {
+		t.Errorf("userID: want %d, got %d", wantID, gotID)
 	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, _ := token.SignedString(secret)
-	return tokenString
-}
-
-func generateExpiredToken(secret []byte, userID uint) string {
-	claims := jwt.MapClaims{
-		"userID": float64(userID),
-		"exp":    time.Now().Add(-time.Hour).Unix(), // Already expired
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, _ := token.SignedString(secret)
-	return tokenString
 }
