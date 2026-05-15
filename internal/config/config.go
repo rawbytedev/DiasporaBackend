@@ -17,14 +17,39 @@ type Config struct {
 }
 
 func NewConfig() *Config {
+	postgresDSN := os.Getenv("DATABASE_URL")
+	if postgresDSN == "" {
+		postgresDSN = "host=localhost user=postgres password=secret dbname=diaspora port=5432 sslmode=disable"
+	}
+
+	adminPrivateKey := os.Getenv("ADMIN_PRIVATE_KEY")
+	if adminPrivateKey == "" {
+		adminPrivateKey = "your_admin_private_key"
+	}
+
+	mobileMoneyAPIKey := os.Getenv("MOBILE_MONEY_API_KEY")
+	if mobileMoneyAPIKey == "" {
+		mobileMoneyAPIKey = "your_api_key"
+	}
+
+	mobileMoneyAPISecret := os.Getenv("MOBILE_MONEY_API_SECRET")
+	if mobileMoneyAPISecret == "" {
+		mobileMoneyAPISecret = "your_api_secret"
+	}
+
+	solanaRPCURL := os.Getenv("SOLANA_RPC_URL")
+	if solanaRPCURL == "" {
+		solanaRPCURL = "https://api.devnet.solana.com"
+	}
+
 	return &Config{
-		PostgresDSN:          "host=localhost user=postgres password=secret dbname=diaspora port=5432 sslmode=disable",
+		PostgresDSN:          postgresDSN,
 		CacheDir:             "./badger_data",
-		SolanaRPCURL:         "https://api.devnet.solana.com",
-		AdminPrivateKey:      "your_admin_private_key", // In a real implementation, this should be securely stored and not hardcoded
+		SolanaRPCURL:         solanaRPCURL,
+		AdminPrivateKey:      adminPrivateKey,
 		MobileMoneyAPIURL:    "https://api.mobilemoney.com",
-		MobileMoneyAPIKey:    "your_api_key",    // In
-		MobileMoneyAPISecret: "your_api_secret", // In a real implementation, this should be securely stored and not hardcoded
+		MobileMoneyAPIKey:    mobileMoneyAPIKey,
+		MobileMoneyAPISecret: mobileMoneyAPISecret,
 	}
 }
 
@@ -41,7 +66,6 @@ func (c *Config) LoadFromEnv() {
 }
 
 func (c *Config) Validate() error {
-	// In a real implementation, you would add validation logic here to ensure all required fields are set and valid
 	return nil
 }
 
@@ -73,26 +97,5 @@ func LoadConfigFromFile(filename string) (*Config, error) {
 }
 
 func LoadConfig() *Config {
-	adminPrivateKey := os.Getenv("ADMIN_PRIVATE_KEY")
-	if adminPrivateKey == "" {
-		adminPrivateKey = "your_admin_private_key" // In a real implementation, this should be securely stored and not hardcoded
-	}
-	MobileMoneyAPIKey := os.Getenv("MOBILE_MONEY_API_KEY")
-	if MobileMoneyAPIKey == "" {
-		MobileMoneyAPIKey = "your_api_key" // In a real implementation, this should be securely stored and not hardcoded
-	}
-	MobileMoneyAPISecret := os.Getenv("MOBILE_MONEY_API_SECRET")
-	if MobileMoneyAPISecret == "" {
-		MobileMoneyAPISecret = "your_api_secret" // In a real implementation, this should be securely stored and not hardcoded
-	}
-
-	return &Config{
-		PostgresDSN:          "host=localhost user=postgres password=secret dbname=diaspora port=5432 sslmode=disable",
-		CacheDir:             "./badger_data",
-		SolanaRPCURL:         "https://api.devnet.solana.com",
-		AdminPrivateKey:      adminPrivateKey,
-		MobileMoneyAPIURL:    "https://api.mobilemoney.com",
-		MobileMoneyAPIKey:    MobileMoneyAPIKey,
-		MobileMoneyAPISecret: MobileMoneyAPISecret,
-	}
+	return NewConfig()
 }

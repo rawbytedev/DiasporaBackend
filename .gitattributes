@@ -1,0 +1,2 @@
+badger_data/000002.vlog filter=lfs diff=lfs merge=lfs -text
+badger_data/00002.mem filter=lfs diff=lfs merge=lfs -text
