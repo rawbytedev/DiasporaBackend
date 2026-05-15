@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"Diaspora/internal/middleware"
 	"Diaspora/internal/models"
 	"Diaspora/internal/repository"
 	"Diaspora/internal/solana"
@@ -9,37 +10,61 @@ import (
 	"time"
 )
 
+// TransferRequest is the JSON body for POST /api/transfer.
 type TransferRequest struct {
 	RecipientPhone string  `json:"recipient_phone"`
 	AmountUSDT     float64 `json:"amount_usdt"`
 }
 
-func SendTransfer(userRepo *repository.UserRepo, transferRepo *repository.TransferRepo, solClient *solana.Client) http.HandlerFunc {
+// SendTransfer initiates a USDT escrow transfer on the Solana blockchain.
+//
+//	POST /api/transfer
+//	Authorization: Bearer <token>
+//	Content-Type: application/json
+func SendTransfer(userRepo *repository.UserRepo, transferRepo *repository.TransferRepo, solClient solana.ClientInterface) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := middleware.UserIDFromContext(r.Context())
+		if !ok {
+			middleware.JSONError(w, http.StatusUnauthorized, "missing user context")
+			return
+		}
+
 		var req TransferRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request", http.StatusBadRequest)
+			middleware.JSONError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
-		senderID := r.Context().Value("userID").(uint)
-		// récupérer destinataire
+		if req.RecipientPhone == "" {
+			middleware.JSONError(w, http.StatusBadRequest, "recipient_phone is required")
+			return
+		}
+		if req.AmountUSDT <= 0 {
+			middleware.JSONError(w, http.StatusBadRequest, "amount_usdt must be positive")
+			return
+		}
+
 		recipient, err := userRepo.GetUserByPhone(r.Context(), req.RecipientPhone)
 		if err != nil {
-			http.Error(w, "recipient not found", http.StatusNotFound)
+			middleware.JSONError(w, http.StatusNotFound, "recipient not found")
 			return
 		}
-		// calculer frais 1%
+		if recipient.ID == userID {
+			middleware.JSONError(w, http.StatusBadRequest, "cannot transfer to yourself")
+			return
+		}
+
+		// 1 % platform fee.
 		fees := req.AmountUSDT * 0.01
 		netAmount := req.AmountUSDT - fees
-		// construire transaction Solana (appel au smart contract)
-		txHash, err := solClient.InitiateTransfer(senderID, recipient.ID, netAmount, fees)
+
+		txHash, err := solClient.InitiateTransfer(userID, recipient.ID, netAmount, fees)
 		if err != nil {
-			http.Error(w, "blockchain error: "+err.Error(), http.StatusInternalServerError)
+			middleware.JSONError(w, http.StatusInternalServerError, "blockchain error: "+err.Error())
 			return
 		}
-		// sauvegarder en base
+
 		transfer := &models.Transfer{
-			SenderID:     senderID,
+			SenderID:     userID,
 			RecipientID:  recipient.ID,
 			AmountUSDT:   netAmount,
 			FeesUSDT:     fees,
@@ -48,17 +73,22 @@ func SendTransfer(userRepo *repository.UserRepo, transferRepo *repository.Transf
 			ExpiresAt:    time.Now().Add(7 * 24 * time.Hour),
 		}
 		if err := transferRepo.CreateTransfer(r.Context(), transfer); err != nil {
-			http.Error(w, "db error", http.StatusInternalServerError)
+			middleware.JSONError(w, http.StatusInternalServerError, "failed to save transfer record")
 			return
 		}
-		// invalider caches
-		_ = userRepo.UpdateStateVersion(senderID)
+
+		_ = userRepo.UpdateStateVersion(userID)
 		_ = userRepo.UpdateStateVersion(recipient.ID)
-		_ = transferRepo.InvalidateTransferCaches(senderID, recipient.ID, userRepo)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"tx_hash": txHash,
-			"status":  "pending",
+		_ = transferRepo.InvalidateTransferCaches(userID, recipient.ID, userRepo)
+
+		middleware.JSONResponse(w, http.StatusCreated, map[string]interface{}{
+			"transfer_id":     transfer.ID,
+			"tx_hash":         txHash,
+			"amount_usdt":     netAmount,
+			"fees_usdt":       fees,
+			"recipient_phone": req.RecipientPhone,
+			"status":          "pending",
+			"expires_at":      transfer.ExpiresAt,
 		})
 	}
 }
